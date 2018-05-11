@@ -6,12 +6,18 @@ ANSIBLE_METADATA = {'status': ['preview'],
 
 DOCUMENTATION = '''
 ---
-module: k5_key_container_list
+# TODO
+module: k5_key_delete
 short_description: List key metadata containers
 version_added: "1.0"
 description:
     - returns a dict of containers
 options:
+   key_id:
+     description:
+       - ID of the key to delete.
+     required: true
+     default: None
    k5_auth:
      description:
        - dict of k5_auth module output.
@@ -22,11 +28,13 @@ requirements:
 '''
 
 EXAMPLES = '''
-- k5_key_container_list:
+- k5_key_delete:
+     key_id: "decafbad-1234-5678-90ab-decafbad1234"
      k5_auth: "{{ k5_auth_facts }}"
 '''
 
 RETURN = '''
+# TODO
 k5_key_container_list
     description: Dictionary describing the novnc details.
     returned: On success when the server is found
@@ -86,8 +94,8 @@ def k5_get_endpoint(e,name):
 
     return e['endpoints'][name]
 
-def k5_key_container_list(module):
-    """list vpn servies"""
+def k5_key_delete(module):
+    """delete vpn container"""
     
     global k5_debug
 
@@ -104,35 +112,38 @@ def k5_key_container_list(module):
     endpoint = k5_facts['endpoints']['keymanagement']
     auth_token = k5_facts['auth_token']
 
-    k5_debug_add('auth_token: {0}'.format(auth_token))
+    #k5_debug_add('auth_token: {0}'.format(auth_token))
 
     # actually the project_id, but stated as tenant_id in the API
     tenant_id = k5_facts['auth_spec']['os_project_id']
+    
+    res_id = module.params['key_id']
 
     session = requests.Session()
 
-    headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Auth-Token': auth_token }
+    #headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Auth-Token': auth_token }
+    headers = {'X-Auth-Token': auth_token }
 
-    url = endpoint + '/' + tenant_id + '/containers?limit=1000'  # TODO limit + offset
+    url = endpoint + '/' + tenant_id + '/secrets/' + res_id 
 
-    k5_debug_add('endpoint: {0}'.format(endpoint))
+    #k5_debug_add('endpoint: {0}'.format(endpoint))
     k5_debug_add('REQ: {0}'.format(url))
-    k5_debug_add('headers: {0}'.format(headers))
+    #k5_debug_add('headers: {0}'.format(headers))
     #k5_debug_add('json: {0}'.format(query_json))
 
     try:
-        response = session.request('GET', url, headers=headers)
+        response = session.request('DELETE', url, headers=headers)
     except requests.exceptions.RequestException as e:
         module.fail_json(msg=e)
 
     # we failed to make a change
-    if response.status_code not in (200,):
+    if response.status_code not in (204,):
         module.fail_json(msg="RESP: HTTP Code:" + str(response.status_code) + " " + str(response.content), debug=k5_debug_out)
 
     if k5_debug:
-        module.exit_json(changed=True, msg="List VPN Credentials Successful", k5_container_facts=response.json(), debug=k5_debug_out )
+        module.exit_json(changed=True, msg="Delete Successful", debug=k5_debug_out )
     else:
-        module.exit_json(changed=True, msg="List VPN Credentials Successful", k5_container_facts=response.json() )
+        module.exit_json(changed=True, msg="Delete Successful" )
 
 
 ######################################################################################
@@ -140,10 +151,11 @@ def k5_key_container_list(module):
 def main():
 
     module = AnsibleModule( argument_spec=dict(
-        k5_auth = dict(required=True, default=None, type='dict')
+        k5_auth = dict(required=True, default=None, type='dict'),
+        key_id = dict(required=True, default=None, type='str')
     ) )
 
-    k5_key_container_list(module)
+    k5_key_delete(module)
 
 
 ######################################################################################

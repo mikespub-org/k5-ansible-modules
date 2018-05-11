@@ -7,21 +7,31 @@ ANSIBLE_METADATA = {'status': ['preview'],
 DOCUMENTATION = '''
 ---
 module: k5_auth
-short_description: Retrieve an authentication token from K5
+short_description: Create and retrieve an authentication token from K5
 version_added: "1.0"
 description:
     - Login and Retrieve an authentication token from K5, plus the endpoints
 options:
    username:
      description:
-        - Login username.
+        - Login username. LEGACY will be removed in future versions.
      required: false
      default: None
    password:
      description:
-        - Password of user.
+        - Password of user. LEGACY will be removed in future versions.
      required: false
      default: None
+   token_type:
+     description:
+        - Regional or Global token type creation.
+     required: false
+     default: Regional
+   scoped:
+     description:
+        - Set scope of token
+     required: false
+     default: True
    user_domain:
      description:
         - Domain the user belongs to.
@@ -37,20 +47,50 @@ options:
        - Region the user belongs to.
      required: false
      default: None     
+
 requirements:
     - "python >= 2.6"
 '''
 
 EXAMPLES = '''
-# Get auth token using module paramters
-- k5_auth:
-     username: admin
-     password: secret
-     user_domain: demo
-     project_id: 9500d1d6b17936ea97745d5de30cc112
-     region_name: uk-1
-# Get auth token using Openstack OS_* environment variables
-- k5_auth:
+# Requires access to OS_* environment variables or os_client_config cloud.yaml
+ 
+- name: "Regional default scoped"
+  k5_auth:
+    token_type: regional
+  register: regional_auth
+
+
+- name: "Regional un-scoped"
+  k5_auth:
+    token_type: regional
+    scoped: False
+  register: regional_auth
+
+
+- name: "Regional set as scoped"
+  k5_auth:
+    token_type: regional
+    scoped: True
+  register: regional_auth
+
+
+- name: "Global un-scoped"
+  k5_auth:
+    token_type: global
+    scoped: False
+  register: global_auth
+
+
+- name: "Global set scoped - and override some external vars"
+  k5_auth:
+    token_type: global
+    scoped: True
+    user_domain: "YssmW1yI"
+    project_id: eadb882573ac40b1b101eac93009a313 # default project id for YssmW1yI-prj
+  register: global_auth
+
+
 '''
 
 RETURN = '''
@@ -112,13 +152,19 @@ import json
 from ansible.module_utils.basic import *
 import os_client_config
 
+import sys
+import keystoneauth1.exceptions
+
+import re
+
 #useful items to use later in other modules
 k5_auth_spec = dict(
-    os_username=None, 
-    os_password=None, 
-    os_region_name=None, 
-    os_project_id=None, 
-    os_user_domain=None 
+    os_username=None,
+    os_password=None,
+    os_region_name=None,
+    os_project_id=None,
+    os_project_name=None,
+    os_user_domain=None
 )
 
 k5_endpoints = dict(
@@ -201,8 +247,14 @@ def k5_get_endpoints(e):
 
 def k5_get_auth_spec(module):
     """Get the K5 authentication details from the shell environment or module params"""
-
     global k5_debug
+
+    OS_REGION_NAME = None
+    OS_USERNAME = None
+    OS_PASSWORD = None
+    OS_PROJECT_NAME = None
+    OS_PROJECT_ID = None
+    OS_USER_DOMAIN_NAME = None
 
     if 'K5_DEBUG' in os.environ:
         k5_debug = True
@@ -210,7 +262,15 @@ def k5_get_auth_spec(module):
     mp = module.params
 
     cloud_configured = False
-    
+   
+    # not so nice fix for #24
+    # not happy about this, but os_client_config.OpenStackConfig().get_all_clouds() seems to 
+    # wipe the OS_ envvars if OS_AUTH_TOKEN is set
+    # TBH why set OS_AUTH_TOKEN if you are using these modules
+    if 'OS_AUTH_TOKEN' in os.environ:
+        module.warn('OS_AUTH_TOKEN is set, this breaks this module and has been unset')
+        del os.environ['OS_AUTH_TOKEN']
+ 
     if 'cloud' in mp and mp['cloud'] and 'region_name' in mp and mp['region_name']:
         cloud_config = os_client_config.OpenStackConfig().get_one_cloud(mp['cloud'], region_name=mp['region_name'])
         cloud_configured = True
@@ -218,7 +278,23 @@ def k5_get_auth_spec(module):
         cloud_config = os_client_config.OpenStackConfig().get_one_cloud(mp['cloud'])
         cloud_configured = True
     else:
-        all_cloud_config = os_client_config.OpenStackConfig().get_all_clouds()
+        all_cloud_config = {}
+        try:
+            # this fails if OS_AUTH_TOKEN is set #24 = but does not raise
+            all_cloud_config = os_client_config.OpenStackConfig().get_all_clouds()
+        except keystoneauth1.exceptions.auth_plugins.MissingRequiredOptions as e:
+            # no envvars AND no cloud.yaml found!
+            # keystoneauth1.exceptions.auth_plugins.MissingRequiredOptions: Auth plugin requires parameters which were not given: auth_url
+            warn_msg="Old style LEGACY auth found, consider using openstack OS_ ENVVARS or cloud.yaml in the future. " + str(e)
+            k5_debug_add(warn_msg)
+            k5_debug_add(str(e))
+            module.warn(warn_msg)
+            # no fail here, just pass though for now!
+        except:
+            print "Unexpected error: {0}".format( sys.exc_info()[0] )
+
+        #------------------------------------------------------------
+
         cloud_names = ""
         cloud_counter = 0
         for cloud in all_cloud_config:
@@ -235,20 +311,30 @@ def k5_get_auth_spec(module):
 
         if cloud_configured == False:
             if k5_debug:
-                module.fail_json(msg='Please select a cloud/region pair from ' + cloud_names, k5_debug=k5_debug_out)
+                module.fail_json(msg='Found a clouds.yaml file. Please select a cloud/region pair from ' + cloud_names, k5_debug=k5_debug_out)
             else:
-                module.fail_json(msg='Please select a cloud/region pair from ' + cloud_names)
+                module.fail_json(msg='Found a clouds.yaml file. Please select a cloud/region pair from ' + cloud_names)
 
-    k5_debug_add(cloud_config.config)
 
-    # finish here! Debug begins!
+    # ----------------------------------
+    if cloud_configured == True:
+        k5_debug_add(cloud_config.config)
 
-    OS_USERNAME = cloud_config.auth['username']
-    OS_PASSWORD = cloud_config.auth['password']
-    OS_REGION_NAME = cloud_config.region
-    OS_PROJECT_ID = cloud_config.auth['project_id']
-    OS_USER_DOMAIN_NAME = cloud_config.auth['user_domain_name']
-    
+        # finish here! Debug begins!
+        OS_REGION_NAME = cloud_config.region
+        if 'username' in cloud_config.auth and cloud_config.auth['username']:
+            OS_USERNAME = cloud_config.auth['username']
+        if 'password' in cloud_config.auth and cloud_config.auth['password']:
+            OS_PASSWORD = cloud_config.auth['password']
+        if 'project_name' in cloud_config.auth and cloud_config.auth['project_name']:
+            OS_PROJECT_NAME = cloud_config.auth['project_name']
+        if 'project_id' in cloud_config.auth and cloud_config.auth['project_id']:
+            OS_PROJECT_ID = cloud_config.auth['project_id']
+        if 'domain_name' in cloud_config.auth and cloud_config.auth['domain_name']:
+            OS_USER_DOMAIN_NAME = cloud_config.auth['domain_name']
+        if 'user_domain_name' in cloud_config.auth and cloud_config.auth['user_domain_name']:
+            OS_USER_DOMAIN_NAME = cloud_config.auth['user_domain_name']
+
     # now overwrite the vars if provided within the playbook module
 
     if 'username' in mp and mp['username']:
@@ -267,17 +353,13 @@ def k5_get_auth_spec(module):
 
     if 'region_name' in mp and mp['region_name']:
         k5_auth_spec['os_region_name'] = mp['region_name']
-    elif OS_REGION_NAME is None:
+    elif OS_REGION_NAME == "" and 'auth_url' in cloud_config.auth and cloud_config.auth['auth_url']:
+        match = re.search('https://identity\.([^\.]*)\.cloud.global.fujitsu.com', cloud_config.auth['auth_url'])
+        k5_auth_spec['os_region_name'] = match.group(1)
+    elif OS_REGION_NAME == "":
         module.fail_json(msg='param region_name or OS_REGION_NAME environment variable is missing', k5_auth_facts=k5_debug)
     else:
         k5_auth_spec['os_region_name'] = OS_REGION_NAME
-
-    if 'project_id' in mp and mp['project_id']:
-        k5_auth_spec['os_project_id'] = mp['project_id']
-    elif OS_PROJECT_ID is None:
-        module.fail_json(msg= 'param project_id or OS_PROJECT_ID environment variable is missing', k5_auth_facts=k5_debug)
-    else:
-        k5_auth_spec['os_project_id'] = OS_PROJECT_ID
 
     if 'user_domain' in mp and mp['user_domain']:
         k5_auth_spec['os_user_domain'] = mp['user_domain']
@@ -285,10 +367,22 @@ def k5_get_auth_spec(module):
         module.fail_json(msg= 'param user_domain or OS_USER_DOMAIN_NAME environment variable is missing', k5_auth_facts=k5_debug)
     else:
         k5_auth_spec['os_user_domain'] = OS_USER_DOMAIN_NAME
+
+    # Note that these two fields won't error here, but do below after the scope is build
+    if 'project_name' in mp and mp['project_name']:
+        k5_auth_spec['os_project_name'] = mp['project_name']
+    elif OS_PROJECT_NAME is not None:
+        k5_auth_spec['os_project_name'] = OS_PROJECT_NAME
+
+    if 'project_id' in mp and mp['project_id']:
+        k5_auth_spec['os_project_id'] = mp['project_id']
+    elif OS_PROJECT_ID is not None:
+        k5_auth_spec['os_project_id'] = OS_PROJECT_ID
     
     k5_debug_add('os_username: {0}'.format(k5_auth_spec['os_username']))
 #    k5_debug_add('os_password: {0}'.format(k5_auth_spec['os_password']))
     k5_debug_add('os_region_name: {0}'.format(k5_auth_spec['os_region_name']))
+    k5_debug_add('os_project_name: {0}'.format(k5_auth_spec['os_project_name']))
     k5_debug_add('os_project_id: {0}'.format(k5_auth_spec['os_project_id']))
     k5_debug_add('os_user_domain: {0}'.format(k5_auth_spec['os_user_domain']))
 
@@ -305,16 +399,71 @@ def k5_get_auth_token(module):
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 
     url = k5_endpoints['identity'] + '/v3/auth/tokens'
+
+    # note 'scope' is missing
+    if 'os_project_id' in k5_auth_spec and k5_auth_spec['os_project_id'] is not None:
+        query_json = {'auth': {
+                                'identity': {
+                                    'methods': ['password'],
+                                    'password': {
+                                        'user': {
+                                            'domain': {
+                                                'name': k5_auth_spec['os_user_domain']
+                                            },
+                                            'name': k5_auth_spec['os_username'],
+                                            'password': k5_auth_spec['os_password']
+                                        }
+                                    }
+                                },
+                                "scope": {
+                                    "project": {
+                                        "id": k5_auth_spec['os_project_id']
+                                    }
+                                }
+                           }
+                        }
+    elif 'os_project_name' in k5_auth_spec and k5_auth_spec['os_project_name'] is not None:
+        query_json = {'auth': {
+                                'identity': {
+                                    'methods': ['password'],
+                                    'password': {
+                                        'user': {
+                                            'domain': {
+                                                'name': k5_auth_spec['os_user_domain']
+                                            },
+                                            'name': k5_auth_spec['os_username'],
+                                            'password': k5_auth_spec['os_password']
+                                        }
+                                    }
+                                },
+                                "scope": {
+                                    "project": {
+                                        "name": k5_auth_spec['os_project_name'],
+                                        "domain": {
+                                            'name': k5_auth_spec['os_user_domain']
+                                        }
+                                    }
+                                }
+                           }
+                        }
+    else:
+        module.fail_json(msg= 'param project_id, project_name or one of environment variables OS_PROJECT_ID or OS_PROJECT_NAME is missing', k5_auth_facts=k5_debug)
+
+    if module.params['token_type'].lower() == 'global':
+        # K5 global token required - change URL
+        url = 'https://identity.gls.cloud.global.fujitsu.com/v3/auth/tokens'
+#    else:
+#        # scope regional token to a project
+#        query_json['auth']['scope'] = { 'project': { 'id': k5_auth_spec['os_project_id'] } }
+
+    if module.params['scoped'] == False:
+        k5_debug_add('removing token scope')
+        if 'scope' in query_json['auth']:
+            del query_json['auth']['scope']
+
     k5_debug_add('endpoint: {0}'.format(url))
-
-    query_json = {'auth': {'identity': {'methods': ['password'],
-                           'password': {'user': {'domain': {'name': k5_auth_spec['os_user_domain']},
-                                                 'name': k5_auth_spec['os_username'],
-                                                 'password': k5_auth_spec['os_password']}}},
-              'scope': {'project': {'id': k5_auth_spec['os_project_id']}}}}
-
-
-    #k5_debug_add('json: {0}'.format(query_json))
+    k5_debug_add('query_json:')
+    k5_debug_add(query_json)
     k5_debug_add('REQ: {0}'.format(url))
 
     try:
@@ -324,7 +473,7 @@ def k5_get_auth_token(module):
 
     # we failed to authenticate
     if response.status_code not in (201,):
-        module.fail_json(msg="RESP: HTTP Code:" + str(response.status_code) + " " + str(response.content), debug=k5_debug_out)
+        module.fail_json(msg="RESP: HTTP Code:" + str(response.status_code) + " " + str(response.content), k5_debug=k5_debug_out)
 
     # we authenticated, now check the token is present
     if 'X-Subject-Token' in response.headers.keys():
@@ -340,22 +489,29 @@ def k5_get_auth_token(module):
     k5_get_endpoints(response.json())
 
     # clear os_password from spec before we send it back to the user
-    del k5_auth_spec['os_password']
+    k5_auth_spec['os_password'] = 'xxxxxxxxxxxxxxxxx'
+
+    resp = response.json()['token']
 
     # our json to return as succesful
     k5_auth = {
         "auth_token": auth_token,
+        "token_type": module.params['token_type'].lower(),
         "auth_spec": k5_auth_spec,
         "endpoints": k5_endpoints,
-        "issued": response.json()['token']['issued_at'], 
-        "expiry": response.json()['token']['expires_at'],
+        "issued": resp['issued_at'],
+        "expiry": resp['expires_at'],
+        "roles": resp['roles'],
+        "user": resp['user'],
+        "catalog": resp['catalog'],
+        "scoped": module.params['scoped'],
         "K5_DEBUG": k5_debug
     }
 
 #    if k5_debug:
 #        k5_auth['server_response']=response.json()
 
-    module.exit_json(changed=True, msg="Authentication Successful", k5_auth_facts=k5_auth)
+    module.exit_json(changed=True, msg="Authentication Successful", k5_auth_facts=k5_auth, k5_debug=k5_debug_out)
 
 ######################################################################################
 
@@ -363,18 +519,21 @@ def main():
 
     module = AnsibleModule( argument_spec=dict(
         username = dict(required=False, default=None, type='str'),
-        password = dict(required=False, default=None, type='str'),
-        user_domain = dict(required=False, default=None, type='str'), 
+        password = dict(required=False, default=None, type='str', no_log=True),
+        user_domain = dict(required=False, default=None, type='str'),
         project_id = dict(required=False, default=None, type='str'),
+        project_name = dict(required=False, default=None, type='str'),
         region_name = dict(required=False, default=None, type='str'),
-        cloud = dict(required=False, default=None, type='str')
+        token_type = dict(default='regional', choices=['regional', 'global']),
+        cloud = dict(required=False, default=None, type='str'),
+        scoped = dict(required=False, default=True, type='bool')
     ) )
 
     k5_get_auth_token(module)
 
 ######################################################################################
 
-if __name__ == '__main__':  
+if __name__ == '__main__':
     main()
 
 

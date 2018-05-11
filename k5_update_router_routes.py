@@ -41,8 +41,10 @@ EXAMPLES = '''
 - k5_update_router_routes:
         state: present
         routes: 
-          - "172.16.1.1","10.10.10.0/24"
-          - "172.16.1.1","10.10.20.0/24"
+          - nexthop: "10.10.10.0/24"
+            destination: "172.16.1.1"
+          - nexthop: "10.10.20.0/24"
+            destination: "172.16.1.1"
         router_name: "nx-test-net-1a"
         k5_auth: "{{ k5_auth_reg.k5_auth_facts }}"
 '''
@@ -82,6 +84,44 @@ def k5_get_endpoint(e,name):
     """Pull particular endpoint name from dict"""
 
     return e['endpoints'][name]
+
+
+def k5_get_router_routes(module, k5_facts):
+    """Get routes from a router_name"""
+
+    endpoint = k5_facts['endpoints']['networking']
+    auth_token = k5_facts['auth_token']
+    
+    router_name = module.params['router_name']
+
+    session = requests.Session()
+
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Auth-Token': auth_token }
+
+    url = endpoint + '/v2.0/routers'
+
+    k5_debug_add('endpoint: {0}'.format(endpoint))
+    k5_debug_add('REQ: {0}'.format(url))
+    k5_debug_add('headers: {0}'.format(headers))
+
+    try:
+        response = session.request('GET', url, headers=headers)
+    except requests.exceptions.RequestException as e:
+        module.fail_json(msg=e)
+
+    # we failed to get data
+    if response.status_code not in (200,):
+        module.fail_json(msg="RESP: HTTP Code:" + str(response.status_code) + " " + str(response.content), debug=k5_debug_out)
+
+    #k5_debug_add("RESP: " + str(response.json()))
+
+    for n in response.json()['routers']:
+        #k5_debug_add("Found router name: " + str(n['name']))
+        if str(n['name']) == router_name:
+            #k5_debug_add("Found it!")
+            return n['routes']
+
+    return ''
 
 
 def k5_get_router_id_from_name(module, k5_facts):
@@ -141,7 +181,6 @@ def k5_update_router_routes(module):
     routes = module.params['routes']
     router_name = module.params['router_name']
 
-   
     # we need the router_id not router_name, so grab it
     router_id = k5_get_router_id_from_name(module, k5_facts)
     if router_id == '':
@@ -150,9 +189,20 @@ def k5_update_router_routes(module):
         else:
             module.exit_json(changed=False, msg="Router " + router_name + " not found")
 
-    # To add multiple routes we need to convert the variable from a list to a Dictionary
-    routes_dict = [{'nexthop': route.split(',')[0], 'destination': route.split(',')[1]} for route in routes]
+    state = module.params['state']
+    if state == 'append':
+        # append old routes with new ones
+        routes_dict = routes + k5_get_router_routes(module, k5_facts)
+    elif state == 'present':
+        # overwrite routes with new ones
+        routes_dict = routes
+    else:
+        # delete all routes on a router
+        routes_dict = {}
 
+    k5_debug_add("routes_dict")
+    k5_debug_add(routes_dict)
+    
     # actually the project_id, but stated as tenant_id in the API
     tenant_id = k5_facts['auth_spec']['os_project_id']
     
@@ -178,7 +228,7 @@ def k5_update_router_routes(module):
     try:
         response = session.request('PUT', url, headers=headers, json=query_json)
     except requests.exceptions.RequestException as e:
-        module.fail_json(msg=e)
+        module.fail_json(msg=e, k5_debug=k5_debug_out)
 
     # we failed to make a change
     if response.status_code not in (200,):
@@ -196,15 +246,12 @@ def main():
 
     module = AnsibleModule( argument_spec=dict(
         router_name = dict(required=True, default=None, type='str'),
-        state = dict(required=True, type='str'), # should be a choice
-        routes = dict(required=True, default=None, type='list'),
+        state = dict(default='present', choices=['present', 'absent', 'append']),
+        routes = dict(required=False, default=[], type='list'),
         k5_auth = dict(required=True, default=None, type='dict')
     ) )
 
-    if module.params['state'] == 'present':
-        k5_update_router_routes(module)
-    else:
-       module.fail_json(msg="No 'absent' function in this module, use os_port module instead") 
+    k5_update_router_routes(module)
 
 
 ######################################################################################

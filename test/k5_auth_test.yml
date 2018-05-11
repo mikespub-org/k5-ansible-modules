@@ -1,0 +1,101 @@
+# vim: noai:ts=2:sw=2:et
+---
+
+- name: "K5 Auth Test"
+
+  hosts: localhost
+
+  become: no
+  become_user: root
+  become_method: sudo
+
+  gather_facts: no
+
+  tasks:
+
+    - name: "Regional tests"
+      block: 
+        - name: "Regional default scoped"
+          k5_auth:
+            token_type: regional
+          register: regional_auth
+        - debug: 
+            msg:
+              - "Token {{ regional_auth.k5_auth_facts.auth_token }}"
+              - "Scoped {{ regional_auth.k5_auth_facts.scoped }}"
+              - "Type {{ regional_auth.k5_auth_facts.token_type }}"
+              - "Expiry {{ regional_auth.k5_auth_facts.expiry }}"
+     
+        - name: "Regional un-scoped"
+          k5_auth:
+            token_type: regional
+            scoped: False
+          register: regional_auth
+        - debug: 
+            msg:
+              - "Token {{ regional_auth.k5_auth_facts.auth_token }}"
+              - "Scoped {{ regional_auth.k5_auth_facts.scoped }}"
+              - "Type {{ regional_auth.k5_auth_facts.token_type }}"
+              - "Expiry {{ regional_auth.k5_auth_facts.expiry }}"
+
+        - name: "Regional set as scoped"
+          k5_auth:
+            token_type: regional
+            scoped: True
+          register: regional_auth
+        - debug: 
+            msg:
+              - "Token {{ regional_auth.k5_auth_facts.auth_token }}"
+              - "Scoped {{ regional_auth.k5_auth_facts.scoped }}"
+              - "Type {{ regional_auth.k5_auth_facts.token_type }}"
+              - "Expiry {{ regional_auth.k5_auth_facts.expiry }}"
+
+      tags: regional_tests
+
+    - name: "Global tests"
+      block: 
+        - name: "Global un-scoped"
+          k5_auth:
+            token_type: global
+            scoped: False
+          register: global_auth
+        - debug:
+             msg:
+              - "Token {{ global_auth.k5_auth_facts.auth_token }}"
+              - "Scoped {{ global_auth.k5_auth_facts.scoped }}"
+              - "Type {{ global_auth.k5_auth_facts.token_type }}"
+              - "Expiry {{ global_auth.k5_auth_facts.expiry }}"
+
+        - name: "Global set scoped"
+          k5_auth:
+            token_type: global
+            scoped: True
+            user_domain: "YssmW1yI"
+            project_id: eadb882573ac40b1b101eac93009a313 # default project id for YssmW1yI-prj
+          register: global_auth
+        - debug:
+             msg:
+              - "Token {{ global_auth.k5_auth_facts.auth_token }}"
+              - "Scoped {{ global_auth.k5_auth_facts.scoped }}"
+              - "Type {{ global_auth.k5_auth_facts.token_type }}"
+              - "Expiry {{ global_auth.k5_auth_facts.expiry }}"
+
+      tags: global_tests
+
+    - name: "Project Name Test"
+      block:
+        - k5_auth:
+            token_type: regional
+            scoped: true
+            project_name: "scratch09b"
+          register: project_auth
+          environment:
+            # unset this, so we only use the project_name
+            OS_PROJECT_ID: ""
+      
+        - debug:
+           msg:
+            - "Token: {{ project_auth.k5_auth_facts.auth_token }}"
+            #- "user.domain: {{ project_auth.k5_auth_facts.user.domain.id }}"
+
+      tags: project_name_tests

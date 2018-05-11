@@ -7,88 +7,67 @@ ANSIBLE_METADATA = {'status': ['preview'],
 DOCUMENTATION = '''
 ---
 module: k5_router_create_ssl_vpn
-short_description: Display the URL to the NoVNC Console
+short_description: Create an OpenVPN Server
 version_added: "1.0"
 description:
-    - returns a URL to the noVNC console.
+    - Create an OpenVPN Server
 options:
    name:
      description:
         - Name of the VPN
      required: true
      default: None
-
    router_name:
      description:
         - Name of the router to attach the SSL VPN to
      required: true
      default: None
-
    subnet_name:
      description:
         - Name of the subnet that the VON connects to inside K5
      required: true
      default: None
-
    client_cidr:
      description:
         - IP subnet of the remote clients. A NAT subnet inside K5. (not the clients actual subnet)
      required: true
      default: None
-
    availablity_zone:
      description:
         - Name of the availability zone
      required: true
      default: None
-
    ca:
      description:
         - CA key in pem format
      required: true
      default: None
-
    server_certificate:
      description:
         - server cert in pem format
      required: true
      default: None
-
    server_key:
      description:
         - server key in pem format
      required: true
      default: None
-
    dh:
      description:
         - dh in pem format
      required: true
      default: None
 
-
-
 requirements:
     - "python >= 2.6"
 '''
 
+#TODO
 EXAMPLES = '''
-# Get novnc url
-- k5_router_create_ssl_vpn:
-     server_name: test01
-     k5_auth: "{{ k5_auth_facts }}"
 '''
 
+#TODO
 RETURN = '''
-k5_novnc_console_facts
-    description: Dictionary describing the novnc details.
-    returned: On success when the server is found
-    type: dictionary
-    contains:
-        id:
-            description: Router ID.
-            type: string
-            sample: "474acfe5-be34-494c-b339-50f06aa143e4"
 '''
 
 
@@ -127,6 +106,8 @@ def k5_get_endpoint(e,name):
 def k5_upload_payload(module, payload, payload_name):
     """Upload payload vpn secrets"""
     
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
+
     k5_facts = module.params['k5_auth']
 
     endpoint = k5_facts['endpoints']['keymanagement']
@@ -170,6 +151,8 @@ def k5_upload_payload(module, payload, payload_name):
 def k5_create_credentials_container(module, ca_ref, server_certificate_ref, server_key, dh_ref):
     """create the container"""
     
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
+
     k5_facts = module.params['k5_auth']
 
     endpoint = k5_facts['endpoints']['keymanagement']
@@ -230,6 +213,8 @@ def k5_create_credentials_container(module, ca_ref, server_certificate_ref, serv
 def k5_get_subnet_id_from_name(module, k5_facts):
     """Get an id from a subnet_name"""
 
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
+
     endpoint = k5_facts['endpoints']['networking']
     auth_token = k5_facts['auth_token']
     subnet_name = module.params['subnet_name']
@@ -265,6 +250,8 @@ def k5_get_subnet_id_from_name(module, k5_facts):
 
 def k5_get_router_id_from_name(module, k5_facts):
     """Get an id from a router_name"""
+
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
 
     endpoint = k5_facts['endpoints']['networking']
     auth_token = k5_facts['auth_token']
@@ -304,6 +291,8 @@ def k5_get_router_id_from_name(module, k5_facts):
 def k5_router_attach_ssl_vpn_service(module):
     """create the service"""
     
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
+
     k5_facts = module.params['k5_auth']
 
     endpoint = k5_facts['endpoints']['networking']
@@ -348,6 +337,8 @@ def k5_router_attach_ssl_vpn_service(module):
 def k5_create_ssl_vpn_connection(module, container_id, vpn_id):
     """create the connection"""
     
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
+
     k5_facts = module.params['k5_auth']
 
     endpoint = k5_facts['endpoints']['networking']
@@ -405,6 +396,8 @@ def k5_router_create_ssl_vpn(module):
     global k5_debug
 
     k5_debug_clear()
+
+    k5_debug_add("def: " + sys._getframe().f_code.co_name)
 
     if 'K5_DEBUG' in os.environ:
         k5_debug = True
@@ -469,6 +462,11 @@ def main():
         dh = dict(required=True, default=None, type='str'),
         k5_auth = dict(required=True, default=None, type='dict')
     ) )
+
+    # TODO more checks on the data here - are the certs provided
+    if k5_get_router_id_from_name(module,module.params['k5_auth']) is '':
+        module.fail_json(msg="Router does not exist")
+        
 
     k5_router_create_ssl_vpn(module)
 
